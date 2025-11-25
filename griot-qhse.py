@@ -1,9 +1,8 @@
 """
 GRIOT QHSE - Assistant Trilingue (Wolof/Français/Anglais)
 =========================================================
-Logique : 
-- Texte : Authentique dans les 3 langues via Gemini.
-- Audio : Activé uniquement pour Français et Anglais (gTTS).
+Correction : Gestion robuste des modèles Gemini (Flash/Pro/1.0)
+pour éviter l'erreur 404.
 """
 
 import streamlit as st
@@ -14,7 +13,6 @@ from gtts import gTTS
 import tempfile
 import os
 import time
-import re
 
 # ============================================================================
 # CONFIGURATION
@@ -49,39 +47,49 @@ def enregistrer_log(question, reponse):
     except: pass
 
 # ============================================================================
-# CERVEAU IA (GEMINI) AVEC DÉTECTION INTELLIGENTE
+# CERVEAU IA (GEMINI) AVEC SÉLECTION AUTOMATIQUE DU MODÈLE
 # ============================================================================
 
 def generer_reponse_et_langue(question, api_key):
     genai.configure(api_key=api_key)
     
-    # On force l'IA à nous dire quelle langue elle utilise avec un TAG
     system_instruction = """
     Tu es "Griot QHSE", expert sécurité au Sénégal.
-    
-    RÈGLES STRICTES DE LANGUE :
-    1. Si l'utilisateur parle WOLOF : Réponds en WOLOF PUR (Wolof bu xóot). Commence ta réponse par [WO].
-    2. Si l'utilisateur parle FRANÇAIS : Réponds en FRANÇAIS. Commence ta réponse par [FR].
-    3. Si l'utilisateur parle ANGLAIS : Réponds en ANGLAIS. Commence ta réponse par [EN].
-    
-    TON TON :
-    - Professionnel, bienveillant, axé sur la sécurité (EPI, Normes).
-    - Pas de traductions inutiles. Juste la réponse dans la bonne langue.
+    RÈGLES DE LANGUE :
+    1. Si Wolof : Réponds en WOLOF PUR. Commence par [WO].
+    2. Si Français : Réponds en FRANÇAIS. Commence par [FR].
+    3. Si Anglais : Réponds en ANGLAIS. Commence par [EN].
+    Ton : Professionnel et bienveillant.
     """
     
-    try:
-        # Essai avec le modèle Flash (rapide)
-        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=system_instruction)
-        response = model.generate_content(question)
-        texte_brut = response.text
-    except:
+    # Liste des modèles à tester dans l'ordre de préférence
+    # Google change souvent les noms, on les teste tous pour éviter l'erreur 404
+    modeles_a_tester = [
+        'gemini-1.5-flash',       # Le plus rapide et gratuit
+        'gemini-1.5-flash-latest',# Variante
+        'gemini-1.5-pro',         # Le plus intelligent
+        'gemini-1.0-pro',         # L'ancien modèle stable
+        'gemini-pro'              # Le nom historique (souvent obsolète)
+    ]
+
+    texte_brut = None
+    erreur_message = ""
+
+    # Boucle pour trouver un modèle qui fonctionne
+    for nom_modele in modeles_a_tester:
         try:
-            # Plan B : Modèle Pro (plus stable si Flash échoue)
-            model = genai.GenerativeModel('gemini-pro', system_instruction=system_instruction)
+            model = genai.GenerativeModel(nom_modele, system_instruction=system_instruction)
             response = model.generate_content(question)
             texte_brut = response.text
+            break # Si ça marche, on sort de la boucle
         except Exception as e:
-            return f"[FR] Erreur technique : {e}", "fr"
+            # On garde l'erreur en mémoire et on passe au modèle suivant
+            erreur_message = str(e)
+            continue
+    
+    # Si aucun modèle n'a marché après tous les essais
+    if texte_brut is None:
+        return f"[FR] Désolé, erreur de connexion aux modèles Google. Détail: {erreur_message}", "fr"
 
     # Analyse du TAG pour savoir si on fait de l'audio
     if "[WO]" in texte_brut:
@@ -91,7 +99,6 @@ def generer_reponse_et_langue(question, api_key):
         langue = "en"
         texte_propre = texte_brut.replace("[EN]", "").strip()
     else:
-        # Par défaut on suppose français si pas de tag ou tag [FR]
         langue = "fr"
         texte_propre = texte_brut.replace("[FR]", "").strip()
         
@@ -102,15 +109,10 @@ def generer_reponse_et_langue(question, api_key):
 # ============================================================================
 
 def generer_audio_selectif(texte, langue):
-    """
-    Génère l'audio SEULEMENT si c'est FR ou EN.
-    Renvoie None si c'est Wolof.
-    """
     if langue == "wo":
-        return None # Pas d'audio pour le Wolof (car gTTS est mauvais)
+        return None 
     
     try:
-        # gTTS supporte bien 'fr' et 'en'
         tts = gTTS(text=texte[:600], lang=langue, slow=False)
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
         tts.save(temp_file.name)
@@ -140,11 +142,10 @@ def main():
         st.warning("⚠️ Veuillez entrer la clé API pour activer le Griot.")
         return
 
-    # Gestion de l'historique du chat
+    # Historique
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Affichage des anciens messages
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -153,35 +154,11 @@ def main():
     question = st.chat_input("Posez votre question (Ex: Naka lañuy solé EPI ?)")
 
     if question:
-        # 1. Afficher la question utilisateur
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
 
-        # 2. Générer la réponse
         with st.chat_message("assistant"):
             with st.spinner("Analyse en cours..."):
                 
-                # Appel IA
-                reponse_texte, langue_detectee = generer_reponse_et_langue(question, api_key)
-                
-                # Affichage Texte
-                st.markdown(reponse_texte)
-                
-                # Gestion Audio
-                if langue_detectee == "wo":
-                    st.caption("🔇 *Audio désactivé pour le Wolof (lecture texte uniquement)*")
-                else:
-                    audio_path = generer_audio_selectif(reponse_texte, langue_detectee)
-                    if audio_path:
-                        st.audio(audio_path)
-                        # Nettoyage fichier
-                        try: os.unlink(audio_path)
-                        except: pass
-        
-        # 3. Sauvegarder
-        st.session_state.messages.append({"role": "assistant", "content": reponse_texte})
-        enregistrer_log(question, reponse_texte)
-
-if __name__ == "__main__":
-    main()
+                reponse_texte, langue_detectee
