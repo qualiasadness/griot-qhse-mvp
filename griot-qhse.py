@@ -6,7 +6,7 @@ import nest_asyncio
 import tempfile
 import os
 
-# Patch technique indispensable
+# Patch technique indispensable pour l'audio sur le Cloud
 nest_asyncio.apply()
 
 # ============================================================================
@@ -51,7 +51,7 @@ def trouver_modele_disponible(api_key):
         for m in liste_modeles:
             if 'generateContent' in m.supported_generation_methods:
                 if 'flash' in m.name.lower():
-                    return m.name  # On retourne le nom exact (ex: models/gemini-1.5-flash-001)
+                    return m.name  # On retourne le nom exact
         
         # Si pas de flash, on prend le premier 'gemini' dispo
         for m in liste_modeles:
@@ -61,7 +61,6 @@ def trouver_modele_disponible(api_key):
         return 'gemini-1.5-flash' # Fallback ultime
         
     except Exception as e:
-        # Si erreur de listing, on tente le standard
         return 'gemini-1.5-flash'
 
 # ============================================================================
@@ -115,11 +114,10 @@ def main():
     st.markdown("<p style='text-align: center; color: gray;'>Expert Sécurité • Wolof / Français / English</p>", unsafe_allow_html=True)
 
     # --- GESTION DE LA CLÉ API (SECRETS) ---
-    # C'est ici que ça se joue pour le partage du lien
     api_key = None
     
     if "GEMINI_API_KEY" in st.secrets:
-        # Cas 1 : La clé est dans les secrets (Déploiement Cloud) -> Idéal pour partager
+        # Cas 1 : La clé est dans les secrets (Déploiement Cloud)
         api_key = st.secrets["GEMINI_API_KEY"]
     else:
         # Cas 2 : Pas de secret, on demande à l'utilisateur (Mode test)
@@ -148,6 +146,7 @@ def main():
                 st.audio(msg["audio"])
 
     # --- ENTRÉES ---
+    # NOUVEAU MICRO OFFICIEL
     prompt_audio = st.audio_input("Enregistrer un vocal")
     prompt_texte = st.chat_input("Écrire un message...")
 
@@ -172,4 +171,59 @@ def main():
 
     # --- TRAITEMENT ---
     if prompt_final:
-        # A
+        # Affichage User
+        with st.chat_message("user"):
+            if type_input == "audio":
+                st.markdown("🎤 *Vocal envoyé*")
+            else:
+                st.markdown(prompt_final)
+        
+        st.session_state.messages.append({"role": "user", "content": prompt_final if type_input == "texte" else "🎤 *Vocal*"})
+
+        # Réponse
+        with st.chat_message("assistant"):
+            status = st.status("Le Griot réfléchit...", expanded=True)
+            try:
+                # 1. Texte
+                status.write("🧠 Analyse...")
+                reponse = repondre_avec_ia(prompt_final, type_input, api_key, st.session_state.modele_nom)
+                
+                # 2. Parsing Langue
+                lang = "fr"
+                texte_clean = reponse
+                if "[WO]" in reponse:
+                    lang = "wo"
+                    texte_clean = reponse.replace("[WO]", "")
+                elif "[EN]" in reponse:
+                    lang = "en"
+                    texte_clean = reponse.replace("[EN]", "")
+                elif "[FR]" in reponse:
+                    lang = "fr"
+                    texte_clean = reponse.replace("[FR]", "")
+
+                # 3. Audio Output
+                status.write("🗣️ Synthèse vocale...")
+                audio_out = generer_audio(texte_clean, lang)
+                
+                status.update(label="Terminé", state="complete", expanded=False)
+                
+                st.markdown(texte_clean)
+                if audio_out:
+                    st.audio(audio_out)
+                    if lang == "wo":
+                        st.caption("ℹ️ *Lecture phonétique (Wolof)*")
+
+                # Save
+                msg_data = {"role": "assistant", "content": texte_clean}
+                if audio_out: msg_data["audio"] = audio_out
+                st.session_state.messages.append(msg_data)
+                
+                if temp_path:
+                    os.unlink(temp_path)
+
+            except Exception as e:
+                status.update(label="Erreur", state="error")
+                st.error(f"Erreur technique : {e}")
+
+if __name__ == "__main__":
+    main()
