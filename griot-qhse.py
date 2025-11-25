@@ -7,21 +7,51 @@ import tempfile
 import os
 import time
 
-# ----------------------------------------------------------------------------
-# 1. CONFIGURATION (Doit être la 1ère commande Streamlit)
-# ----------------------------------------------------------------------------
+# ============================================================================
+# 1. CONFIGURATION & ESTHÉTIQUE
+# ============================================================================
+
 st.set_page_config(
-    page_title="Griot QHSE",
-    page_icon="👷🏿‍♂️",
-    layout="wide"
+    page_title="Griot QHSE | Assistant Sécurité",
+    page_icon="🛡️",
+    layout="centered"  # Centered est souvent plus élégant pour un chat
 )
 
-# ----------------------------------------------------------------------------
-# 2. FONCTIONS (Base de données & Audio)
-# ----------------------------------------------------------------------------
+# CSS Personnalisé pour un look "Pro"
+st.markdown("""
+<style>
+    /* En-tête stylisé */
+    .main-header {
+        background: linear-gradient(90deg, #1E3A8A 0%, #3B82F6 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .main-header h1 {
+        color: white !important;
+        margin: 0;
+        font-family: 'Helvetica', sans-serif;
+    }
+    .main-header p {
+        font-size: 1.1em;
+        opacity: 0.9;
+    }
+    /* Style des messages */
+    .stChatMessage {
+        border-radius: 10px;
+        padding: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# 2. LOGIQUE MÉTIER
+# ============================================================================
 
 def init_db():
-    """Initialise la base de données de manière sécurisée."""
     try:
         conn = sqlite3.connect('qhse_logs.db')
         cursor = conn.cursor()
@@ -29,8 +59,7 @@ def init_db():
                          (id INTEGER PRIMARY KEY, question TEXT, reponse TEXT, date_heure TIMESTAMP)''')
         conn.commit()
         conn.close()
-    except Exception as e:
-        st.warning(f"Note: La base de données n'a pas pu être créée (Erreur: {e}). L'app continue quand même.")
+    except: pass
 
 def enregistrer_log(question, reponse):
     try:
@@ -40,131 +69,157 @@ def enregistrer_log(question, reponse):
                        (question, reponse, datetime.now()))
         conn.commit()
         conn.close()
-    except:
-        pass # On ignore les erreurs d'écriture pour ne pas bloquer l'app
+    except: pass
 
 def generer_audio_safe(texte, langue):
-    """Génère l'audio seulement si la langue n'est pas Wolof."""
-    if langue == "wo":
-        return None
-    
+    if langue == "wo": return None
     try:
         tts = gTTS(text=texte[:500], lang=langue, slow=False)
-        # Utilisation de suffixe unique pour éviter les conflits de fichiers
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
         tts.save(tfile.name)
         return tfile.name
-    except Exception:
-        return None
+    except: return None
 
-# ----------------------------------------------------------------------------
-# 3. INTELLIGENCE ARTIFICIELLE
-# ----------------------------------------------------------------------------
+# ============================================================================
+# 3. INTELLIGENCE ARTIFICIELLE (AVEC DÉTAIL D'ERREUR)
+# ============================================================================
 
 def generer_reponse_robuste(question, api_key):
-    """Essaie plusieurs modèles pour éviter l'erreur 404."""
     genai.configure(api_key=api_key)
     
     system_instruction = """
-    Tu es Griot QHSE, expert sécurité Sénégal.
-    - Si WOLOF : Réponds en Wolof pur. Débute par [WO].
-    - Si FRANÇAIS : Réponds en Français. Débute par [FR].
-    - Si ANGLAIS : Réponds en Anglais. Débute par [EN].
+    Tu es "Le Griot QHSE", un expert sage et technique en sécurité au Sénégal.
+    
+    RÈGLES DE LANGUE :
+    - Si WOLOF : Réponds en WOLOF PUR (Wolof bu xóot). Commence par [WO].
+    - Si FRANÇAIS : Réponds en FRANÇAIS. Commence par [FR].
+    - Si ANGLAIS : Réponds en ANGLAIS. Commence par [EN].
+    
+    TON STYLE :
+    - Utilise des emojis pour illustrer (ex: ⚠️, 👷, ✅).
+    - Sois bienveillant comme un père, mais strict sur les règles.
+    - Cite les EPI nécessaires.
     """
     
-    # Liste des modèles à tester (du plus rapide au plus ancien)
-    modeles = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-    
+    # On teste le modèle le plus standard en premier
+    modeles = ['gemini-1.5-flash', 'gemini-1.0-pro']
+    last_error = ""
+
     for modele in modeles:
         try:
             model = genai.GenerativeModel(modele, system_instruction=system_instruction)
             response = model.generate_content(question)
-            return response.text # Si ça marche, on retourne le texte
-        except:
-            continue # Si ça rate, on essaie le suivant
+            return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue # On passe au suivant
             
-    return "[FR] Erreur : Impossible de contacter l'IA (Tous les modèles ont échoué)."
+    # Si on arrive ici, c'est que tout a échoué. On renvoie l'erreur technique pour comprendre.
+    return f"[FR] 🚫 ERREUR TECHNIQUE : {last_error}"
 
-# ----------------------------------------------------------------------------
-# 4. INTERFACE PRINCIPALE
-# ----------------------------------------------------------------------------
+# ============================================================================
+# 4. INTERFACE UTILISATEUR
+# ============================================================================
 
 def main():
-    # Titre et Intro
-    st.title("👷🏿‍♂️ Griot QHSE")
-    st.markdown("**Assistant Sécurité Trilingue (Wolof / Français / Anglais)**")
-    
-    # Vérification API Key
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    else:
-        api_key = st.text_input("🔑 Entrez votre clé API Gemini :", type="password")
-    
-    if not api_key:
-        st.info("Veuillez entrer une clé API pour commencer.")
-        st.stop() # Arrête le script proprement ici si pas de clé
-
-    # Initialisation DB
     init_db()
 
-    # Chat
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    # --- EN-TÊTE ---
+    st.markdown("""
+    <div class="main-header">
+        <h1>🦁 Griot QHSE</h1>
+        <p>Votre Expert Sécurité : Wolof • Français • English</p>
+    </div>
+    """, unsafe_allow_html=True)
 
+    # --- SIDEBAR ---
+    with st.sidebar:
+        st.image("https://cdn-icons-png.flaticon.com/512/3061/3061341.png", width=100)
+        st.title("Paramètres")
+        
+        # Récupération Clé API
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ Clé API chargée (Secrets)")
+        else:
+            api_key = st.text_input("🔑 Clé API Gemini", type="password")
+            st.caption("Si vous n'avez pas de clé, créez-en une sur Google AI Studio.")
+
+        st.markdown("---")
+        if st.button("🗑️ Effacer la conversation"):
+            st.session_state.messages = []
+            st.rerun()
+
+    if not api_key:
+        st.warning("👋 Veuillez entrer votre clé API dans la barre latérale pour activer le Griot.")
+        return
+
+    # --- CHAT ---
+    if "messages" not in st.session_state:
+        # Message d'accueil par défaut
+        st.session_state.messages = [{
+            "role": "assistant", 
+            "content": "Salamalekum ! 👋🏿 Ma ngi tudd Griot QHSE.\n\nPosez-moi une question sur la sécurité au travail (EPI, Risques, Chantier...) en **Wolof**, **Français** ou **Anglais**."
+        }]
+
+    # Affichage des messages
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
+        # Choix de l'avatar selon le rôle
+        avatar = "🦁" if msg["role"] == "assistant" else "👷🏿‍♂️"
+        with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
-    # Input Utilisateur
-    prompt = st.chat_input("Posez votre question ici...")
+    # --- ZONE DE SAISIE ---
+    prompt = st.chat_input("Ex: Naka lañuy aar sunu bopp ci chantier? / Quels sont les EPI obligatoires ?")
 
     if prompt:
-        # Affichage User
+        # 1. Message User
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="👷🏿‍♂️"):
             st.markdown(prompt)
 
-        # Génération Assistant
-        with st.chat_message("assistant"):
-            with st.spinner("Le Griot réfléchit..."):
+        # 2. Réponse Assistant
+        with st.chat_message("assistant", avatar="🦁"):
+            message_placeholder = st.empty()
+            with st.spinner("Le Griot consulte les anciens..."):
+                
                 reponse_brute = generer_reponse_robuste(prompt, api_key)
                 
-                # Détection langue via les tags
-                if "[WO]" in reponse_brute:
-                    langue = "wo"
-                    texte = reponse_brute.replace("[WO]", "")
-                elif "[EN]" in reponse_brute:
-                    langue = "en"
-                    texte = reponse_brute.replace("[EN]", "")
-                else:
+                # Gestion Erreur API visible
+                if "🚫 ERREUR TECHNIQUE" in reponse_brute:
+                    st.error("Problème de connexion avec Google Gemini.")
+                    st.code(reponse_brute.split(":", 1)[1]) # Affiche le code d'erreur exact
+                    st.info("Vérifiez que votre Clé API est valide et que vous n'avez pas dépassé le quota gratuit.")
+                    texte = "Désolé, je ne peux pas répondre pour l'instant."
                     langue = "fr"
-                    texte = reponse_brute.replace("[FR]", "")
-                
-                # Affichage Texte
-                st.markdown(texte)
-                
-                # Audio (Sauf Wolof)
-                if langue == "wo":
-                    st.caption("🔇 *Lecture texte (Audio Wolof désactivé)*")
                 else:
-                    audio_path = generer_audio_safe(texte, langue)
-                    if audio_path:
-                        st.audio(audio_path)
-                        try: os.unlink(audio_path)
-                        except: pass
+                    # Nettoyage des tags
+                    if "[WO]" in reponse_brute:
+                        langue = "wo"
+                        texte = reponse_brute.replace("[WO]", "")
+                    elif "[EN]" in reponse_brute:
+                        langue = "en"
+                        texte = reponse_brute.replace("[EN]", "")
+                    else:
+                        langue = "fr"
+                        texte = reponse_brute.replace("[FR]", "")
+                    
+                    # Affichage
+                    message_placeholder.markdown(texte)
+
+                    # Audio
+                    if langue == "wo":
+                        st.caption("🔇 *Texte en Wolof (Audio désactivé)*")
+                    else:
+                        audio_path = generer_audio_safe(texte, langue)
+                        if audio_path:
+                            st.audio(audio_path)
+                            try: os.unlink(audio_path)
+                            except: pass
         
-        # Sauvegarde
+        # 3. Sauvegarde
         st.session_state.messages.append({"role": "assistant", "content": texte})
         enregistrer_log(prompt, texte)
 
-# ----------------------------------------------------------------------------
-# 5. POINT D'ENTRÉE SÉCURISÉ (C'est ça qui évite l'écran blanc)
-# ----------------------------------------------------------------------------
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        # Si ça plante, on affiche l'erreur en gros sur l'écran
-        st.error("🚨 Une erreur critique est survenue au démarrage :")
-        st.code(str(e))
-        st.info("Essayez de changer la version de Python en 3.11 dans les réglages Streamlit.")
+    main()
