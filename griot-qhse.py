@@ -24,50 +24,70 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stApp { background-color: white; }
-    /* Style pour le statut */
+    
+    /* Style statut */
     div[data-testid="stStatusWidget"] {
         border: 1px solid #ddd;
         border-radius: 10px;
+        background-color: #f9f9f9;
+    }
+    
+    /* Header simple */
+    .header {
+        text-align: center;
+        padding-bottom: 20px;
+        border-bottom: 1px solid #eee;
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# 2. FONCTIONS TECHNIQUES INTELLIGENTES
+# 2. FONCTIONS TECHNIQUES (MODÈLE & AUDIO)
 # ============================================================================
 
-def trouver_vrai_nom_modele(api_key):
+def trouver_bon_modele(api_key):
     """
-    Cette fonction empêche l'erreur 404.
-    Elle demande à Google quel nom utiliser exactement.
+    FORCE l'utilisation de FLASH (Gratuit & Rapide).
+    Évite les modèles 'Pro' ou 'Exp' qui causent l'erreur 429.
     """
     genai.configure(api_key=api_key)
     try:
-        # On liste les modèles disponibles pour TA clé
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                # On cherche le flash en priorité (gratuit et rapide)
-                if 'flash' in m.name:
-                    return m.name
-                # Sinon le pro
-                if 'pro' in m.name:
-                    return m.name
-        # Si on ne trouve rien de précis, on renvoie un défaut
-        return 'models/gemini-1.5-flash'
-    except Exception as e:
-        # En cas d'erreur de connexion
-        return None
+        # Liste de préférence (du plus stable au plus récent)
+        # On ne veut QUE du flash pour éviter les limites
+        modeles_gratuits = [
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-flash-002",
+            "gemini-1.5-flash-8b"
+        ]
+        
+        # On demande à Google ce qui est dispo
+        dispo = [m.name.replace("models/", "") for m in genai.list_models()]
+        
+        # On prend le premier modèle gratuit qui existe dans la liste dispo
+        for m in modeles_gratuits:
+            if m in dispo:
+                return f"models/{m}"
+        
+        # Si on ne trouve rien, on force le standard
+        return "models/gemini-1.5-flash"
+        
+    except Exception:
+        # En cas de doute, on renvoie le modèle le plus standard
+        return "models/gemini-1.5-flash"
 
 async def generer_audio_hd_async(texte, langue):
     """
     Génère l'audio.
-    Si Wolof (wo) -> On utilise la voix Française (Henri) pour lire le texte phonétiquement.
+    Si Wolof (wo) -> Utilise la voix Française pour lire (lecture phonétique).
     """
     # Sélection de la voix
     if langue == "en":
         voice = "en-US-ChristopherNeural"
     else:
         # Pour FR et WOLOF, on utilise Henri (Français)
+        # C'est la seule façon d'avoir du son pour le Wolof gratuitement
         voice = "fr-FR-HenriNeural"
     
     communicate = edge_tts.Communicate(texte, voice)
@@ -78,68 +98,70 @@ async def generer_audio_hd_async(texte, langue):
 def generer_audio(texte, langue):
     try:
         return asyncio.run(generer_audio_hd_async(texte, langue))
-    except Exception as e:
+    except Exception:
         return None
 
 def detecter_et_repondre(entree, type_entree, api_key, nom_modele):
     genai.configure(api_key=api_key)
     
+    # Prompt optimisé pour la sécurité et la langue
     system_instruction = """
     Tu es le Griot QHSE, expert sécurité Sénégal.
     
-    RÈGLES IMPORTANTES :
-    1. Si l'utilisateur écrit/parle en WOLOF : Réponds en WOLOF. Ajoute le tag [WO] au début.
-    2. Si l'utilisateur écrit/parle en FRANÇAIS : Réponds en FRANÇAIS. Ajoute le tag [FR] au début.
-    3. Si l'utilisateur écrit/parle en ANGLAIS : Réponds en ANGLAIS. Ajoute le tag [EN] au début.
+    RÈGLES DE RÉPONSE :
+    1. Si l'utilisateur parle WOLOF -> Réponds en WOLOF. Ajoute [WO] au début.
+    2. Si l'utilisateur parle FRANÇAIS -> Réponds en FRANÇAIS. Ajoute [FR] au début.
+    3. Si l'utilisateur parle ANGLAIS -> Réponds en ANGLAIS. Ajoute [EN] au début.
     
-    Sois bref et direct.
+    Format : Sois bienveillant, clair et cite les normes de sécurité si nécessaire.
     """
     
     model = genai.GenerativeModel(nom_modele, system_instruction=system_instruction)
     
     if type_entree == "audio":
         myfile = genai.upload_file(entree)
-        response = model.generate_content(["Réponds dans la langue de cet audio.", myfile])
+        response = model.generate_content(["Réponds dans la langue parlée.", myfile])
         return response.text
     else:
         response = model.generate_content(entree)
         return response.text
 
 # ============================================================================
-# 3. INTERFACE
+# 3. INTERFACE UTILISATEUR
 # ============================================================================
 
 def main():
-    st.title("👷🏿‍♂️ Griot QHSE")
-    st.caption("Expert Sécurité • Wolof / Français / English")
+    # En-tête propre
+    st.markdown("""
+        <div class="header">
+            <h1>👷🏿‍♂️ Griot QHSE</h1>
+            <span style="color:gray">Expert Sécurité • Wolof / Français / English</span>
+        </div>
+    """, unsafe_allow_html=True)
 
     # --- SIDEBAR ---
     with st.sidebar:
         st.header("🔑 Connexion")
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("Clé API Active")
+            st.success("Licence Active")
         else:
             api_key = st.text_input("Clé API Gemini", type="password")
             
-        if st.button("🔄 Reset"):
+        st.markdown("---")
+        if st.button("🗑️ Effacer la conversation"):
             st.session_state.messages = []
             st.rerun()
 
     if not api_key:
-        st.warning("Entrez votre clé API à gauche pour commencer.")
+        st.info("⬅️ Entrez votre clé API à gauche pour commencer.")
         return
 
-    # --- RECHERCHE DU MODÈLE (Anti-Erreur 404) ---
-    if "nom_modele_valide" not in st.session_state:
-        with st.spinner("Connexion à Google..."):
-            nom = trouver_vrai_nom_modele(api_key)
-            if nom:
-                st.session_state.nom_modele_valide = nom
-                # st.toast(f"Connecté à : {nom}") # Debug optionnel
-            else:
-                st.error("Impossible de trouver un modèle. Vérifiez votre Clé API.")
-                return
+    # --- SÉLECTION DU MODÈLE (Une seule fois) ---
+    if "modele_actif" not in st.session_state:
+        with st.spinner("Configuration du Griot..."):
+            st.session_state.modele_actif = trouver_bon_modele(api_key)
+            # st.toast(f"Connecté sur : {st.session_state.modele_actif}") # Debug
 
     # --- HISTORIQUE ---
     if "messages" not in st.session_state:
@@ -151,19 +173,23 @@ def main():
             if "audio" in msg:
                 st.audio(msg["audio"])
 
-    # --- ENTRÉES (TEXTE OU VOCAL) ---
-    prompt_texte = st.chat_input("Votre message (Wolof / Fr)...")
+    # --- ZONE D'ENTRÉE ---
+    
+    # 1. Texte
+    prompt_texte = st.chat_input("Écrivez votre message...")
+    
+    # 2. Audio (Natif Streamlit)
     prompt_audio = st.audio_input("Ou enregistrez un vocal")
 
-    # Logique de sélection
+    # LOGIQUE DE CHOIX
     prompt_final = None
     type_input = None
     audio_path_temp = None
 
     if prompt_audio:
-        if "last_audio_id" not in st.session_state or st.session_state.last_audio_id != prompt_audio:
-            st.session_state.last_audio_id = prompt_audio
-            # Sauvegarde temporaire du fichier audio utilisateur
+        if "last_audio_processed" not in st.session_state or st.session_state.last_audio_processed != prompt_audio:
+            st.session_state.last_audio_processed = prompt_audio
+            # Sauvegarde temp
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
                 f.write(prompt_audio.getvalue())
                 audio_path_temp = f.name
@@ -177,39 +203,39 @@ def main():
 
     # --- TRAITEMENT ---
     if prompt_final:
-        # Affiche le message User
+        # Affichage User
         with st.chat_message("user"):
             if type_input == "audio":
                 st.markdown("🎤 *Message vocal envoyé...*")
             else:
                 st.markdown(prompt_final)
         
-        # Ajout historique User
+        # Sauvegarde User
         st.session_state.messages.append({
             "role": "user", 
             "content": prompt_final if type_input == "texte" else "🎤 *Vocal*"
         })
 
-        # Réponse Bot
+        # Réponse Assistant
         with st.chat_message("assistant"):
             status = st.status("Traitement en cours...", expanded=True)
             
             try:
-                # 1. Génération Texte
-                status.write("🧠 Le Griot réfléchit...")
+                # 1. Texte
+                status.write("🧠 Réflexion...")
                 reponse = detecter_et_repondre(
                     prompt_final, 
                     type_input, 
                     api_key, 
-                    st.session_state.nom_modele_valide
+                    st.session_state.modele_actif
                 )
                 
-                # 2. Détection Langue
+                # 2. Nettoyage
                 lang = "fr"
                 texte_propre = reponse
                 
                 if "[WO]" in reponse:
-                    lang = "wo" # On garde 'wo' pour savoir, mais l'audio sera forcé
+                    lang = "wo"
                     texte_propre = reponse.replace("[WO]", "")
                 elif "[EN]" in reponse:
                     lang = "en"
@@ -218,32 +244,34 @@ def main():
                     lang = "fr"
                     texte_propre = reponse.replace("[FR]", "")
                 
-                status.write("🗣️ Génération de la voix...")
-                
-                # 3. Génération Audio (Même pour Wolof maintenant !)
+                # 3. Audio
+                status.write("🗣️ Synthèse vocale...")
                 audio_sortie = generer_audio(texte_propre, lang)
                 
-                status.update(label="Terminé !", state="complete", expanded=False)
+                status.update(label="Réponse prête !", state="complete", expanded=False)
                 
                 # Affichage
                 st.markdown(texte_propre)
                 if audio_sortie:
                     st.audio(audio_sortie)
                     if lang == "wo":
-                        st.caption("ℹ️ *Lecture avec accent français (le Wolof n'est pas supporté nativement)*")
+                        st.caption("ℹ️ *Lecture phonétique (Wolof)*")
                 
-                # Sauvegarde historique Bot
+                # Sauvegarde Bot
                 msg_data = {"role": "assistant", "content": texte_propre}
                 if audio_sortie:
                     msg_data["audio"] = audio_sortie
                 st.session_state.messages.append(msg_data)
                 
-                # Nettoyage
+                # Ménage
                 if audio_path_temp: os.unlink(audio_path_temp)
 
             except Exception as e:
                 status.update(label="Erreur", state="error")
-                st.error(f"Erreur : {str(e)}")
+                if "429" in str(e):
+                    st.error("⚠️ Trop de demandes rapides. Attendez 1 minute.")
+                else:
+                    st.error(f"Erreur : {str(e)}")
 
 if __name__ == "__main__":
     main()
