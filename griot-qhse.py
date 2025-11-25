@@ -1,115 +1,43 @@
 import streamlit as st
 import google.generativeai as genai
-import sqlite3
 import edge_tts
 import asyncio
 import nest_asyncio
-from streamlit_mic_recorder import mic_recorder
 import tempfile
 import os
 
-# Patch pour que l'audio fonctionne sur le Cloud
+# Patch technique obligatoire pour l'audio sur le Cloud
 nest_asyncio.apply()
 
 # ============================================================================
-# 1. CONFIGURATION & DESIGN "CLEAN UI"
+# 1. CONFIGURATION (SIMPLE & PROPRE)
 # ============================================================================
 
 st.set_page_config(
     page_title="Griot QHSE",
-    page_icon="👷🏿‍♂️",
-    layout="centered", # Centré pour ressembler à une app mobile/chat
-    initial_sidebar_state="collapsed" # Sidebar cachée par défaut pour épurér
+    page_icon="🦁",
+    layout="centered"
 )
 
-# CSS pour un look "Premium" et unifié
+# On cache juste le menu hamburger pour faire "App"
 st.markdown("""
 <style>
-    /* 1. Fond général propre */
-    .stApp {
-        background-color: #ffffff;
-    }
-    
-    /* 2. En-tête minimaliste */
-    .header-container {
-        padding: 20px 0;
-        text-align: center;
-        border-bottom: 1px solid #eee;
-        margin-bottom: 20px;
-    }
-    .header-title {
-        font-family: 'Helvetica Neue', sans-serif;
-        font-size: 24px;
-        font-weight: 700;
-        color: #111;
-        margin: 0;
-    }
-    .header-subtitle {
-        color: #666;
-        font-size: 14px;
-        margin-top: 5px;
-    }
-
-    /* 3. Bulles de chat modernes (Style iMessage) */
-    .stChatMessage {
-        background-color: transparent;
-        border: none;
-    }
-    
-    /* Bulle Utilisateur (Bleu moderne) */
-    div[data-testid="chatAvatarIcon-user"] {
-        background-color: #007AFF !important;
-    }
-    div[data-testid="chatAvatarIcon-user"] + div {
-        background-color: #007AFF;
-        color: white;
-        border-radius: 18px 18px 0 18px;
-        padding: 12px 18px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-    }
-
-    /* Bulle Assistant (Gris doux) */
-    div[data-testid="chatAvatarIcon-assistant"] {
-        background-color: #E9E9EB !important;
-    }
-    div[data-testid="chatAvatarIcon-assistant"] + div {
-        background-color: #F2F2F7;
-        color: #000;
-        border-radius: 18px 18px 18px 0;
-        padding: 12px 18px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-    }
-    
-    /* Cacher les éléments inutiles */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    
-    /* Styliser le bouton micro */
-    .mic-recorder-container {
-        text-align: center;
-        margin-bottom: 10px;
-    }
+    .stApp { background-color: white; }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# 2. LOGIQUE TECHNIQUE (ROBUSTE)
+# 2. FONCTIONS TECHNIQUES (ROBUSTES)
 # ============================================================================
 
-def init_db():
-    try:
-        conn = sqlite3.connect('qhse_v4.db')
-        c = conn.cursor()
-        c.execute('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, msg TEXT, date TIMESTAMP)')
-        conn.commit()
-        conn.close()
-    except: pass
-
 async def generer_audio_hd_async(texte, langue):
-    """Génère l'audio (Henri pour FR, Christopher pour EN)."""
+    """Génère l'audio avec Edge TTS (Voix quasi-humaine)."""
     if langue == "wo": return None
+    # Voix : Henri (FR) ou Christopher (EN)
     voice = "fr-FR-HenriNeural" if langue == "fr" else "en-US-ChristopherNeural"
-    communicate = edge_tts.Communicate(texte[:800], voice)
+    communicate = edge_tts.Communicate(texte, voice)
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
     await communicate.save(tfile.name)
     return tfile.name
@@ -117,157 +45,163 @@ async def generer_audio_hd_async(texte, langue):
 def generer_audio(texte, langue):
     try:
         return asyncio.run(generer_audio_hd_async(texte, langue))
-    except: return None
+    except Exception as e:
+        print(f"Erreur Audio: {e}")
+        return None
 
-def traiter_gemini(entree, type_entree, api_key):
+def detecter_et_repondre(entree, type_entree, api_key):
     genai.configure(api_key=api_key)
-    # Prompt optimisé
+    
+    # Prompt simplifié et strict
     system_instruction = """
-    Tu es le Griot QHSE. 
-    1. Langue d'entrée = WOLOF -> Réponds en WOLOF. Tag [WO].
-    2. Langue d'entrée = FRANÇAIS -> Réponds en FRANÇAIS. Tag [FR].
-    3. Langue d'entrée = ANGLAIS -> Réponds en ANGLAIS. Tag [EN].
-    Ton : Court, précis, professionnel. Pas de blabla.
+    Tu es le Griot QHSE.
+    RÈGLES :
+    1. Si je parle WOLOF -> Réponds en WOLOF. Mets le tag [WO] au début.
+    2. Si je parle FRANÇAIS -> Réponds en FRANÇAIS. Mets le tag [FR] au début.
+    3. Si je parle ANGLAIS -> Réponds en ANGLAIS. Mets le tag [EN] au début.
+    Sois concis et utile pour un travailleur sur chantier.
     """
     
-    # Recherche du modèle
-    model_name = 'models/gemini-1.5-flash' # Par défaut
+    # On utilise flash par défaut
+    model = genai.GenerativeModel('models/gemini-1.5-flash', system_instruction=system_instruction)
     
-    try:
-        model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-        
-        if type_entree == "audio":
-            # Traitement Audio
-            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            tfile.write(entree)
-            tfile.close()
-            myfile = genai.upload_file(tfile.name)
-            response = model.generate_content(["Réponds dans la langue de l'audio.", myfile])
-            os.unlink(tfile.name)
-        else:
-            # Traitement Texte
-            response = model.generate_content(entree)
-            
+    if type_entree == "audio":
+        # Traitement natif de l'audio par Gemini
+        myfile = genai.upload_file(entree)
+        response = model.generate_content(["Réponds dans la langue parlée dans cet audio.", myfile])
         return response.text
-    except Exception as e:
-        return f"[FR] Erreur: {str(e)}"
+    else:
+        # Traitement texte
+        response = model.generate_content(entree)
+        return response.text
 
 # ============================================================================
-# 3. INTERFACE UTILISATEUR (MAIN)
+# 3. INTERFACE PRINCIPALE
 # ============================================================================
 
 def main():
-    init_db()
+    st.title("🦁 Griot QHSE")
+    st.caption("Expert Sécurité • Wolof / Français / English")
 
-    # --- HEADER ---
-    st.markdown("""
-        <div class="header-container">
-            <div class="header-title">👷🏿‍♂️ Griot QHSE</div>
-            <div class="header-subtitle">Expert Sécurité • Wolof / Français / English</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # --- CONFIGURATION (Cachée dans un expander pour la propreté) ---
+    # --- SIDEBAR (CONFIGURATION) ---
     with st.sidebar:
-        st.header("Paramètres")
+        st.header("🔐 Connexion")
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("API Connectée")
+            st.success("Licence Active")
         else:
             api_key = st.text_input("Clé API Gemini", type="password")
-        
-        if st.button("Effacer l'historique"):
+            
+        if st.button("🗑️ Nouvelle Conversation"):
             st.session_state.messages = []
             st.rerun()
 
     if not api_key:
-        st.info("👋 Veuillez entrer votre clé API dans le menu à gauche ( > )")
+        st.info("⬅️ Veuillez entrer votre Clé API dans le menu à gauche pour commencer.")
         return
 
-    # --- GESTION MESSAGES ---
+    # --- HISTORIQUE DES MESSAGES ---
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Affichage de l'historique
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            # Si un audio est lié à ce message (stocké dans le dictionnaire)
-            if "audio_path" in msg:
-                st.audio(msg["audio_path"])
+            if "audio" in msg:
+                st.audio(msg["audio"])
 
-    # --- ZONE D'ACTION ---
+    # --- ZONE D'ENTRÉE (LA PARTIE IMPORTANTE) ---
     
-    # 1. ENREGISTREUR VOCAL (Placé juste avant le chat input)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        # Le composant mic_recorder renvoie un dictionnaire quand l'enregistrement finit
-        audio_data = mic_recorder(
-            start_prompt="🎙️ Appuyer pour parler (Wolof/Fr)",
-            stop_prompt="🟥 Arrêter",
-            just_once=True,
-            use_container_width=True,
-            key="recorder"
-        )
-
-    # 2. CHAMPS TEXTE
-    user_input = st.chat_input("Ou écrivez votre message ici...")
-
-    # --- LOGIQUE DE TRAITEMENT UNIQUE ---
-    prompt = None
-    input_type = None
-
-    # Vérification : Est-ce de l'audio ?
-    if audio_data and audio_data['bytes']:
-        # On vérifie si on n'a pas déjà traité cet audio précis (bug fréquent Streamlit)
-        if "last_audio_bytes" not in st.session_state or st.session_state.last_audio_bytes != audio_data['bytes']:
-            st.session_state.last_audio_bytes = audio_data['bytes']
-            prompt = audio_data['bytes']
-            input_type = "audio"
+    # 1. INPUT TEXTE
+    prompt_texte = st.chat_input("Écrivez votre message ici...")
     
-    # Vérification : Est-ce du texte ? (Priorité à l'audio si les deux arrivent en même temps)
-    if user_input and not prompt:
-        prompt = user_input
-        input_type = "text"
+    # 2. INPUT AUDIO (NOUVEAUTÉ STREAMLIT 1.39)
+    # C'est beaucoup plus stable que les boutons personnalisés
+    prompt_audio = st.audio_input("Ou enregistrez votre voix (Mic)")
 
-    # SI ON A UNE ENTRÉE VALIDE, ON TRAITE
-    if prompt:
-        # Affiche le message User
+    # --- TRAITEMENT ---
+    prompt_final = None
+    type_input = None
+    fichier_audio_path = None
+
+    # Logique de priorité : Si on a un audio nouveau, on le prend
+    if prompt_audio:
+        # Astuce pour ne pas re-traiter le même fichier audio en boucle
+        # On compare la taille ou l'ID si possible, sinon on gère via session state
+        if "last_audio" not in st.session_state or st.session_state.last_audio != prompt_audio:
+            st.session_state.last_audio = prompt_audio
+            prompt_final = prompt_audio # C'est un fichier UploadedFile
+            # On le sauvegarde temporairement sur le disque pour Gemini
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+                f.write(prompt_audio.getvalue())
+                fichier_audio_path = f.name
+            
+            prompt_final = fichier_audio_path
+            type_input = "audio"
+            
+    # Sinon on prend le texte
+    elif prompt_texte:
+        prompt_final = prompt_texte
+        type_input = "texte"
+
+    # SI ON A UNE ENTRÉE À TRAITER
+    if prompt_final:
+        # Affiche le message utilisateur
         with st.chat_message("user"):
-            if input_type == "audio":
-                st.markdown("*🎤 Message vocal envoyé...*")
-                st.session_state.messages.append({"role": "user", "content": "*🎤 Message vocal envoyé...*"})
+            if type_input == "audio":
+                st.markdown("🎤 *Message vocal envoyé...*")
+                st.audio(prompt_audio) # On réécoute ce qu'on a envoyé
             else:
-                st.markdown(prompt)
-                st.session_state.messages.append({"role": "user", "content": prompt})
+                st.markdown(prompt_final)
 
-        # Génère la réponse
+        # Ajoute à l'historique session
+        msg_user = {"role": "user", "content": prompt_final if type_input == "texte" else "🎤 *Message vocal*"}
+        st.session_state.messages.append(msg_user)
+
+        # GÉNÉRATION RÉPONSE
         with st.chat_message("assistant"):
-            with st.spinner("..."):
-                reponse_brute = traiter_gemini(prompt, input_type, api_key)
+            # Boite de statut pour voir que ça ne plante pas
+            status = st.status("🔄 Le Griot réfléchit...", expanded=True)
+            
+            try:
+                # 1. Appel API
+                status.write("🧠 Analyse de la question...")
+                reponse_brute = detecter_et_repondre(prompt_final, type_input, api_key)
                 
-                # Parsing simple des tags
-                lang, text = "fr", reponse_brute
-                if "[WO]" in reponse_brute: lang, text = "wo", reponse_brute.replace("[WO]", "")
-                elif "[EN]" in reponse_brute: lang, text = "en", reponse_brute.replace("[EN]", "")
-                elif "[FR]" in reponse_brute: lang, text = "fr", reponse_brute.replace("[FR]", "")
+                # 2. Nettoyage Tags
+                lang, texte = "fr", reponse_brute
+                if "[WO]" in reponse_brute: lang, texte = "wo", reponse_brute.replace("[WO]", "")
+                elif "[EN]" in reponse_brute: lang, texte = "en", reponse_brute.replace("[EN]", "")
+                elif "[FR]" in reponse_brute: lang, texte = "fr", reponse_brute.replace("[FR]", "")
                 
-                st.markdown(text)
+                status.write("📝 Rédaction de la réponse...")
                 
-                # Audio HD (Seulement si pas Wolof)
-                audio_file = None
+                # 3. Génération Audio HD
+                audio_path = None
                 if lang != "wo":
-                    audio_file = generer_audio(text, lang)
-                    if audio_file:
-                        st.audio(audio_file)
-                else:
-                    st.caption("🔇 Wolof (Texte uniquement)")
+                    status.write("🗣️ Synthèse vocale HD...")
+                    audio_path = generer_audio(texte, lang)
+                
+                status.update(label="✅ Terminé !", state="complete", expanded=False)
+                
+                # Affichage final
+                st.markdown(texte)
+                if audio_path:
+                    st.audio(audio_path)
+                    
+                # Sauvegarde historique
+                msg_bot = {"role": "assistant", "content": texte}
+                if audio_path:
+                    msg_bot["audio"] = audio_path
+                st.session_state.messages.append(msg_bot)
 
-                # Sauvegarde dans session
-                msg_data = {"role": "assistant", "content": text}
-                if audio_file:
-                    msg_data["audio_path"] = audio_file
-                st.session_state.messages.append(msg_data)
+                # Nettoyage fichier temp audio entrée
+                if type_input == "audio" and fichier_audio_path:
+                    os.unlink(fichier_audio_path)
+
+            except Exception as e:
+                status.update(label="❌ Erreur", state="error")
+                st.error(f"Une erreur est survenue : {e}")
 
 if __name__ == "__main__":
     main()
