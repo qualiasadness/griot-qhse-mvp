@@ -5,74 +5,115 @@ from datetime import datetime
 from gtts import gTTS
 import tempfile
 import os
-import time
 
 # ============================================================================
-# 1. CONFIGURATION & ESTHÉTIQUE
+# 1. CONFIGURATION & STYLE
 # ============================================================================
 
 st.set_page_config(
-    page_title="Griot QHSE | Assistant Sécurité",
-    page_icon="🛡️",
-    layout="centered"  # Centered est souvent plus élégant pour un chat
+    page_title="Griot QHSE | Expert Sécurité",
+    page_icon="🦁",
+    layout="centered"
 )
 
-# CSS Personnalisé pour un look "Pro"
+# Style CSS Pro
 st.markdown("""
 <style>
-    /* En-tête stylisé */
     .main-header {
-        background: linear-gradient(90deg, #1E3A8A 0%, #3B82F6 100%);
+        background: linear-gradient(135deg, #0F2027 0%, #203A43 50%, #2C5364 100%);
         padding: 20px;
-        border-radius: 10px;
+        border-radius: 15px;
         color: white;
         text-align: center;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 25px;
+        border: 2px solid #FFD700;
     }
-    .main-header h1 {
-        color: white !important;
-        margin: 0;
-        font-family: 'Helvetica', sans-serif;
-    }
-    .main-header p {
-        font-size: 1.1em;
-        opacity: 0.9;
-    }
-    /* Style des messages */
     .stChatMessage {
-        border-radius: 10px;
+        border-radius: 15px;
         padding: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .info-box {
+        background-color: #e0f7fa;
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 0.8em;
+        color: #006064;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# 2. LOGIQUE MÉTIER
+# 2. LOGIQUE INTELLIGENTE (AUTO-DETECTION DU MODÈLE)
+# ============================================================================
+
+def trouver_modele_disponible(api_key):
+    """
+    Fonction CRITIQUE : Elle demande à Google quels modèles sont dispos
+    pour cette clé API au lieu de deviner un nom au hasard.
+    """
+    genai.configure(api_key=api_key)
+    try:
+        # On liste tous les modèles disponibles pour cette clé
+        liste_modeles = genai.list_models()
+        
+        modele_choisi = None
+        
+        # On cherche un modèle Gemini qui sait générer du contenu
+        for m in liste_modeles:
+            if 'generateContent' in m.supported_generation_methods:
+                nom = m.name.lower()
+                # On préfère le modèle Flash (plus rapide) ou Pro récent
+                if 'gemini' in nom:
+                    if 'flash' in nom:
+                        return m.name # Priorité au Flash
+                    if 'pro' in nom and not modele_choisi:
+                        modele_choisi = m.name # Sinon on garde le Pro sous le coude
+        
+        # Si on a trouvé un Pro mais pas de Flash, on prend le Pro
+        if modele_choisi:
+            return modele_choisi
+            
+        # Si la liste est vide ou bizarre, on tente le nom par défaut le plus sûr
+        return "models/gemini-1.5-flash"
+        
+    except Exception as e:
+        return None
+
+def generer_reponse(question, api_key, nom_modele):
+    """Génère la réponse avec le modèle qu'on a trouvé."""
+    genai.configure(api_key=api_key)
+    
+    system_instruction = """
+    Tu es "Le Griot QHSE", expert sécurité au Sénégal.
+    1. Si on te parle WOLOF -> Réponds en WOLOF (Wolof pur). Commence par [WO].
+    2. Si on te parle FRANÇAIS -> Réponds en FRANÇAIS. Commence par [FR].
+    3. Si on te parle ANGLAIS -> Réponds en ANGLAIS. Commence par [EN].
+    Ton : Paternel, Sage, Expert Technique (Normes, EPI).
+    """
+    
+    try:
+        model = genai.GenerativeModel(nom_modele, system_instruction=system_instruction)
+        response = model.generate_content(question)
+        return response.text
+    except Exception as e:
+        return f"[FR] 🚫 Erreur sur le modèle {nom_modele} : {str(e)}"
+
+# ============================================================================
+# 3. FONCTIONS UTILITAIRES (AUDIO & DB)
 # ============================================================================
 
 def init_db():
     try:
         conn = sqlite3.connect('qhse_logs.db')
-        cursor = conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS logs 
-                         (id INTEGER PRIMARY KEY, question TEXT, reponse TEXT, date_heure TIMESTAMP)''')
+        conn.cursor().execute('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, question TEXT, reponse TEXT)')
         conn.commit()
         conn.close()
     except: pass
 
-def enregistrer_log(question, reponse):
-    try:
-        conn = sqlite3.connect('qhse_logs.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO logs (question, reponse, date_heure) VALUES (?, ?, ?)', 
-                       (question, reponse, datetime.now()))
-        conn.commit()
-        conn.close()
-    except: pass
-
-def generer_audio_safe(texte, langue):
-    if langue == "wo": return None
+def generer_audio(texte, langue):
+    if langue == "wo": return None # Pas d'audio pour Wolof (qualité médiocre)
     try:
         tts = gTTS(text=texte[:500], lang=langue, slow=False)
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
@@ -81,145 +122,108 @@ def generer_audio_safe(texte, langue):
     except: return None
 
 # ============================================================================
-# 3. INTELLIGENCE ARTIFICIELLE (AVEC DÉTAIL D'ERREUR)
-# ============================================================================
-
-def generer_reponse_robuste(question, api_key):
-    genai.configure(api_key=api_key)
-    
-    system_instruction = """
-    Tu es "Le Griot QHSE", un expert sage et technique en sécurité au Sénégal.
-    
-    RÈGLES DE LANGUE :
-    - Si WOLOF : Réponds en WOLOF PUR (Wolof bu xóot). Commence par [WO].
-    - Si FRANÇAIS : Réponds en FRANÇAIS. Commence par [FR].
-    - Si ANGLAIS : Réponds en ANGLAIS. Commence par [EN].
-    
-    TON STYLE :
-    - Utilise des emojis pour illustrer (ex: ⚠️, 👷, ✅).
-    - Sois bienveillant comme un père, mais strict sur les règles.
-    - Cite les EPI nécessaires.
-    """
-    
-    # On teste le modèle le plus standard en premier
-    modeles = ['gemini-1.5-flash', 'gemini-1.0-pro']
-    last_error = ""
-
-    for modele in modeles:
-        try:
-            model = genai.GenerativeModel(modele, system_instruction=system_instruction)
-            response = model.generate_content(question)
-            return response.text
-        except Exception as e:
-            last_error = str(e)
-            continue # On passe au suivant
-            
-    # Si on arrive ici, c'est que tout a échoué. On renvoie l'erreur technique pour comprendre.
-    return f"[FR] 🚫 ERREUR TECHNIQUE : {last_error}"
-
-# ============================================================================
 # 4. INTERFACE UTILISATEUR
 # ============================================================================
 
 def main():
     init_db()
 
-    # --- EN-TÊTE ---
+    # EN-TÊTE
     st.markdown("""
     <div class="main-header">
         <h1>🦁 Griot QHSE</h1>
-        <p>Votre Expert Sécurité : Wolof • Français • English</p>
+        <p>Expert Sécurité Trilingue (Wolof • Fr • En)</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # --- SIDEBAR ---
+    # SIDEBAR
     with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/3061/3061341.png", width=100)
-        st.title("Paramètres")
-        
-        # Récupération Clé API
+        st.header("⚙️ Configuration")
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ Clé API chargée (Secrets)")
+            st.success("✅ Clé API active")
         else:
             api_key = st.text_input("🔑 Clé API Gemini", type="password")
-            st.caption("Si vous n'avez pas de clé, créez-en une sur Google AI Studio.")
-
+        
         st.markdown("---")
-        if st.button("🗑️ Effacer la conversation"):
-            st.session_state.messages = []
-            st.rerun()
+        
+        # AFFICHAGE DU MODÈLE DÉTECTÉ (POUR LE DEBUG)
+        if api_key:
+            if "nom_modele_actif" not in st.session_state:
+                with st.spinner("Recherche du meilleur modèle..."):
+                    modele_trouve = trouver_modele_disponible(api_key)
+                    if modele_trouve:
+                        st.session_state.nom_modele_actif = modele_trouve
+                    else:
+                        st.error("Impossible de lister les modèles. Vérifiez la clé.")
+            
+            if "nom_modele_actif" in st.session_state:
+                st.info(f"🤖 Modèle actif : **{st.session_state.nom_modele_actif}**")
+                
+                if st.button("🔄 Changer de modèle"):
+                    del st.session_state.nom_modele_actif
+                    st.rerun()
 
     if not api_key:
-        st.warning("👋 Veuillez entrer votre clé API dans la barre latérale pour activer le Griot.")
+        st.warning("Veuillez entrer une clé API pour commencer.")
         return
 
-    # --- CHAT ---
+    # CHAT
     if "messages" not in st.session_state:
-        # Message d'accueil par défaut
         st.session_state.messages = [{
             "role": "assistant", 
-            "content": "Salamalekum ! 👋🏿 Ma ngi tudd Griot QHSE.\n\nPosez-moi une question sur la sécurité au travail (EPI, Risques, Chantier...) en **Wolof**, **Français** ou **Anglais**."
+            "content": "Jàmm nga am ! Ma ngi tudd Griot QHSE. 🦁\nPoser votre question sécurité en Wolof, Français ou Anglais."
         }]
 
-    # Affichage des messages
     for msg in st.session_state.messages:
-        # Choix de l'avatar selon le rôle
         avatar = "🦁" if msg["role"] == "assistant" else "👷🏿‍♂️"
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
-    # --- ZONE DE SAISIE ---
-    prompt = st.chat_input("Ex: Naka lañuy aar sunu bopp ci chantier? / Quels sont les EPI obligatoires ?")
+    # INPUT
+    prompt = st.chat_input("Votre question...")
 
     if prompt:
-        # 1. Message User
+        # User
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👷🏿‍♂️"):
             st.markdown(prompt)
 
-        # 2. Réponse Assistant
+        # Assistant
         with st.chat_message("assistant", avatar="🦁"):
             message_placeholder = st.empty()
-            with st.spinner("Le Griot consulte les anciens..."):
+            
+            # Vérification qu'on a un modèle
+            nom_modele = st.session_state.get("nom_modele_actif", "models/gemini-1.5-flash")
+            
+            with st.spinner("Le Griot réfléchit..."):
+                reponse_brute = generer_reponse(prompt, api_key, nom_modele)
                 
-                reponse_brute = generer_reponse_robuste(prompt, api_key)
-                
-                # Gestion Erreur API visible
-                if "🚫 ERREUR TECHNIQUE" in reponse_brute:
-                    st.error("Problème de connexion avec Google Gemini.")
-                    st.code(reponse_brute.split(":", 1)[1]) # Affiche le code d'erreur exact
-                    st.info("Vérifiez que votre Clé API est valide et que vous n'avez pas dépassé le quota gratuit.")
-                    texte = "Désolé, je ne peux pas répondre pour l'instant."
-                    langue = "fr"
+                # Gestion des langues et tags
+                if "[WO]" in reponse_brute:
+                    langue, texte = "wo", reponse_brute.replace("[WO]", "")
+                elif "[EN]" in reponse_brute:
+                    langue, texte = "en", reponse_brute.replace("[EN]", "")
+                elif "[FR]" in reponse_brute:
+                    langue, texte = "fr", reponse_brute.replace("[FR]", "")
+                elif "🚫 Erreur" in reponse_brute:
+                    langue, texte = "error", reponse_brute
                 else:
-                    # Nettoyage des tags
-                    if "[WO]" in reponse_brute:
-                        langue = "wo"
-                        texte = reponse_brute.replace("[WO]", "")
-                    elif "[EN]" in reponse_brute:
-                        langue = "en"
-                        texte = reponse_brute.replace("[EN]", "")
-                    else:
-                        langue = "fr"
-                        texte = reponse_brute.replace("[FR]", "")
-                    
-                    # Affichage
-                    message_placeholder.markdown(texte)
+                    langue, texte = "fr", reponse_brute # Par défaut
 
-                    # Audio
-                    if langue == "wo":
-                        st.caption("🔇 *Texte en Wolof (Audio désactivé)*")
-                    else:
-                        audio_path = generer_audio_safe(texte, langue)
-                        if audio_path:
-                            st.audio(audio_path)
-                            try: os.unlink(audio_path)
-                            except: pass
+                message_placeholder.markdown(texte)
+
+                # Audio
+                if langue == "wo":
+                    st.caption("🔇 *Audio Wolof désactivé (Texte uniquement)*")
+                elif langue != "error":
+                    path = generer_audio(texte, langue)
+                    if path:
+                        st.audio(path)
+                        try: os.unlink(path)
+                        except: pass
         
-        # 3. Sauvegarde
         st.session_state.messages.append({"role": "assistant", "content": texte})
-        enregistrer_log(prompt, texte)
 
 if __name__ == "__main__":
     main()
